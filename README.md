@@ -12,3 +12,5 @@ w<sub>i,j</sub> = weight assigned to term i in document j<br>
 tf<sub>i,j</sub> = number of occurrence of term i in document j<br>
 N = number of documents in entire collection<br>
 n<sub>i</sub> = number of documents with term i<br>
+
+**w<sub>i,j</sub> = tf<sub>i,j</sub> log( N / n<sub>i</sub> )**
