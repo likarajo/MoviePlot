@@ -1,25 +1,24 @@
-import org.apache.spark.SparkContext
+import org.apache.spark.{SparkConf, SparkContext}
 
 import scala.collection.mutable.ListBuffer
 
-class MoviePlot {
+class MoviePlot extends Serializable {
 
   def main(args: Array[String]) {
 
-    if(args.length<2){
-      println("Usage: atleast 2 arguments required => directory word")
+    if (args.length < 2) {
+      println("Usage: atleast 2 arguments required => directory word(s)")
       System.exit(1)
     }
 
+    val conf = new SparkConf().setAppName("AirportRank")
+    val sc = new SparkContext(conf)
+
     val dir = args(0)
 
-    val sc = new SparkContext()
+    val lines = sc.textFile(dir + "/plot_summaries.txt")
 
-    val lines = sc
-      .textFile(dir + "/plot_summaries.txt")
-      .cache()
-
-    val N = lines.count()
+    val N = lines.count().toInt
 
     val movie_words = lines.flatMap {
       line => {
@@ -27,7 +26,7 @@ class MoviePlot {
         val words = text.trim.split("""\W+""")
         words.filter(_.length() > 4).map(item => (movieid.trim -> item))
       }
-    }.cache()
+    }
 
     val word_in_movie = movie_words.map {
       case (movieid, word) => (word, movieid)
@@ -44,19 +43,17 @@ class MoviePlot {
         val seq2 = seq map {
           case (_, (m, n)) => (m, n)
         }
-        (w, seq2.mkString(",")) // (word1,(movie1,count1),(movie2,count2))
-      }.cache()
+        (w, seq2.mkString(" ")) // (word1,(movie1,count1),(movie2,count2))
+      }
 
     val doc_freq = word_in_movie // ((word,movie),count)
       .map { x => (x._1) } // (word,movie)
       .map { x => (x._1, 1) } // (word,1)
       .reduceByKey(_ + _) // (word,doc_count)
-      .cache()
 
     val tfdf = term_freq.join(doc_freq) // (word,((movie1,count1),(movie2,count2),doc_count))
-      .cache()
 
-    val final_weight = for (a <- tfdf) // (word, [(movie_tf)], df))
+    val final_weight = for (a <- tfdf) // (word,[(movie,tf)],df))
       yield {
         val word = a._1
         val df = a._2._2
@@ -79,14 +76,15 @@ class MoviePlot {
         word_tuple_final
       }
 
+    // Sorting the final_weight according to the weight calculated: (word,(movie,weight))/**
     val tfidf = final_weight
       .flatMap(x => x)
       .collect()
-      .map(x => (x(0),(x(1),x(2))))
-      .sortBy{case (word: String, (movieid: String, tfidf: String)) => -tfidf.toDouble}
+      .map(x => (x(0), (x(1), x(2))))
+      .sortBy { case (word: String, (movieid: String, tfidf: String)) => -tfidf.toDouble }
 
-    val document_weights = tfidf.filter(x => x._1 == "Bello")
-      .sortBy{case (word: String, (documentId: String, tfidfvalue: String)) => -tfidfvalue.toDouble}.take(10)
+    val document_weights = tfidf.filter(x => x._1 == "action").take(10)
+    document_weights.toSeq.foreach(println)
 
   }
 

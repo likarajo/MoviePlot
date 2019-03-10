@@ -4,7 +4,7 @@
 		module="movieplot-build"
 		revision="0.1.0-SNAPSHOT"
 		status="integration"
-		publication="20190303174127"
+		publication="20190309162839"
 		e:sbtVersion="1.0" e:scalaVersion="2.12"
 	>
 		<description>
