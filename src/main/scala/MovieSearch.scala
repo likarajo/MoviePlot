@@ -11,11 +11,21 @@ class MovieSearch extends Serializable {
       System.exit(1)
     }
 
+    val dir = args(0)
+
+    val word = args(1)
+
+    var query = args(1)
+
+    for (i <- 2 to args.length - 1) {
+      query = query + " " + args(i)
+    }
+
     val conf = new SparkConf().setAppName("AirportRank")
     val sc = new SparkContext(conf)
 
-    val dir = args(0)
-    val words = args(2)
+    val lookup = sc.textFile(dir + "/movie.metadata.tsv")
+      .map(x => (x.split("\t")(0), x.split("\t")(2)))
 
     val lines = sc.textFile(dir + "/plot_summaries.txt")
 
@@ -84,9 +94,18 @@ class MovieSearch extends Serializable {
       .map(x => (x(0), (x(1), x(2))))
       .sortBy { case (word: String, (movieid: String, tfidf: String)) => -tfidf.toDouble }
 
-    val topMovies = tfidf.filter(x => x._1 == words).take(10)
-    topMovies.toSeq.foreach(println)
+
+    if (args.length == 2) {
+      val top10Movies = tfidf.filter(x => x._1 == word).take(10)
+        .map { case (word, (movieid, wt)) => (lookup.lookup(movieid).mkString(""), wt) }
+      top10Movies.toSeq.foreach(println)
+    } else {
+
+    }
 
   }
 
 }
+
+
+
