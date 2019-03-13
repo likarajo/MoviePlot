@@ -3,7 +3,10 @@ import org.apache.spark.{SparkConf, SparkContext}
 object MovieSearch2 {
   def main(args: Array[String]): Unit = {
 
-    val conf = new SparkConf().setAppName("MovieSearch2")
+    val conf = new SparkConf()
+      .setAppName("MovieSearch2")
+      .setMaster("local") // remove when running on a Spark cluster
+
     val sc = new SparkContext(conf)
 
     val dir = args(0)
@@ -15,7 +18,7 @@ object MovieSearch2 {
 
     //preprocessing the data
     val movieWords = moviesum.map(row => row.replaceAll("""[\p{Punct}]""", " ").toLowerCase.split("""\s+"""))
-    val filteredWords = movieWords.map(row => row.map(text => text).filter(text => text.length() > 4))
+    val filteredWords = movieWords.map(row => row.map(text => text).filter(text => text.length() > 4 ))
 
     //extracting search data
     val terms = query.split("\\s+").map(_.trim).toList
@@ -32,9 +35,7 @@ object MovieSearch2 {
     val _DF = _TF.map(item => (item._1._1, 1)).reduceByKey(_ + _)
 
     val N = moviesum.count()
-    val IDF = {
-      _DF.map(r => (r._1, Math.log(N / r._2)))
-    }
+    val IDF = {_DF.map(r => (r._1, Math.log(N / r._2)))}
 
     val TfIDfjoin = TF.join(IDF)
 
@@ -43,7 +44,6 @@ object MovieSearch2 {
 
     if (searchCount == 1) {
 
-      //TFIDF
       val TF_IDF = TFIDF.map(row => (row._1._2, row._2))
       val topTen = lookup.join(TF_IDF).map(row => (row._2._1, row._2._2)).sortBy(-_._2).take(10)
       val topTenRDD = sc.parallelize(topTen)
@@ -68,7 +68,6 @@ object MovieSearch2 {
       val CS = joinedTFIDF.map(r => ((r._2._1._1), (r._1, r._2._1._2 * r._2._2))).map(r => (r._1, r._2._2)).reduceByKey(_ + _)
       val topTenQ = lookup.join(CS).map(r => (r._2._1, r._2._2)).sortBy(-_._2).take(10)
       val topTenQRDD = sc.parallelize(topTenQ)
-
       topTenQRDD.coalesce(1).saveAsTextFile(dir + "/output")
 
     }

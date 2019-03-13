@@ -1,74 +1,100 @@
 import org.apache.spark.{SparkConf, SparkContext}
 
+import scala.collection.mutable.ListBuffer
+
 object MovieSearch {
-  def main(args: Array[String]): Unit = {
 
-    val sc = new SparkContext(new SparkConf().setAppName("MoviePlot"))
+  def main(args: Array[String]) {
 
-    val dir = args(0)
-    val query = args(1)
-
-    val lookup = sc.textFile(dir + "movie.metadata.tsv").map(row => (row.split("\t")(0), row.split("\t")(2)))
-
-    val moviesum = sc.textFile(dir + "plot_summaries.txt")
-
-    //preprocessing the data
-    val movieWords = moviesum.map(row => row.replaceAll("""[\p{Punct}]""", " ").toLowerCase.split("""\s+"""))
-    val filteredWords = movieWords.map(row => row.map(text => text).filter(text => text.length() > 4 ))
-
-    //extracting search data
-    val terms = query.split("\\s+").map(_.trim).toList
-
-    val search = sc.parallelize(terms)
-
-    val words = search.cartesian(filteredWords)
-
-    val wordsMapper = words.map(r => ((r._1, r._2(0)), r._2))
-
-    val _TF = wordsMapper.map(row => (row._1, row._2.count(_.equals(row._1._1)).toDouble / row._2.size)).filter(freq => freq._2 != 0.0)
-    val TF = _TF.map(r => ((r._1._1), (r._1._2, r._2)))
-
-    val _DF = _TF.map(item => (item._1._1, 1)).reduceByKey(_ + _)
-
-    val N = moviesum.count()
-    val IDF = {_DF.map(r => (r._1, Math.log(N / r._2)))}
-
-    val TfIDfjoin = TF.join(IDF)
-
-    val TFIDF = TfIDfjoin.map(r => ((r._1, r._2._1._1), (r._2._1._2) * r._2._2))
-    val searchCount = search.count()
-
-    if (searchCount == 1) {
-
-      val TF_IDF = TFIDF.map(row => (row._1._2, row._2))
-      val topTen = lookup.join(TF_IDF).map(row => (row._2._1, row._2._2)).sortBy(-_._2).take(10)
-      val topTenRDD = sc.parallelize(topTen)
-
-      topTenRDD.saveAsTextFile(dir + "output")
-
-    } else {
-
-      val queryCount = search.map(r => (r, 1)).reduceByKey(_ + _)
-
-      val freq = queryCount.map(r => (r._1, r._2.toDouble / searchCount))
-
-      val IDF_freq = IDF.join(freq)
-
-      val TFIDF_Query = IDF_freq.map(r => (r._1, r._2._1 * r._2._2))
-
-      val TFIDF_combine = TFIDF.map(r => ((r._1._1), (r._1._2, r._2)))
-
-      val joinedTFIDF = TFIDF_combine.join(TFIDF_Query)
-
-      //Cosine Similarity
-      val CS = joinedTFIDF.map(r => ((r._2._1._1), (r._1, r._2._1._2 * r._2._2))).map(r => (r._1, r._2._2)).reduceByKey(_ + _)
-      val topTenQ = lookup.join(CS).map(r => (r._2._1, r._2._2)).sortBy(-_._2).take(10)
-      val topTenQRDD = sc.parallelize(topTenQ)
-      topTenQRDD.coalesce(1).saveAsTextFile(dir + "output")
-
+    if (args.length < 2) {
+      println("Usage: atleast 2 arguments required => directory word(s)")
+      System.exit(1)
     }
 
-    sc.textFile(dir + "/output4/part-*").collect().foreach(println)
+    val conf = new SparkConf()
+      .setAppName("MovieSearch")
+      .setMaster("local") // remove when running on a Spark cluster
+
+    val sc = new SparkContext(conf)
+
+    val dir = args(0)
+    val words = args(1)
+
+    val lookup = sc.textFile(dir + "/movie.metadata.tsv")
+      .map(x => (x.split("\t")(0), x.split("\t")(2)))
+
+    val lines = sc.textFile(dir + "/plot_summaries.txt")
+
+    val N = lines.count().toInt
+
+    val movie_words = lines.flatMap {
+      line => {
+        val Array(movieid, text) = line split "\t"
+        val words = text.trim.split("""\W+""")
+        words.filter(_.length() > 4).map(item => (movieid.trim -> item))
+      }
+    }
+
+    val word_in_movie = movie_words
+      .map {
+        case (movieid, word) => (word, movieid)
+      }.map {
+      case (word, movieid) => ((word, movieid), 1)
+    }.reduceByKey {
+      case (n1, n2) => n1 + n2
+    }.cache()
+
+    val term_freq = word_in_movie // ((word,movie),count)
+      .map { case ((w, m), c) => (w, (m, c)) }
+      .groupBy { case (w, (m, c)) => w }
+      .map { case (w, seq) =>
+        val seq2 = seq map {
+          case (_, (m, n)) => (m, n)
+        }
+        (w, seq2.mkString(" ")) // (word1,(movie1,count1),(movie2,count2))
+      }
+
+    val doc_freq = word_in_movie // ((word,movie),count)
+      .map { x => (x._1) } // (word,movie)
+      .map { x => (x._1, 1) } // (word,1)
+      .reduceByKey(_ + _) // (word,doc_count)
+
+    val tfdf = term_freq.join(doc_freq) // (word,((movie1,count1),(movie2,count2),doc_count))
+
+    val final_weight = for (a <- tfdf) // (word,[(movie,tf)],df))
+      yield {
+        val word = a._1
+        val df = a._2._2
+        val movie_tuples = a._2._1
+        val movie_tf = movie_tuples.split(" ")
+
+        val word_tuple_final = for (b <- movie_tf)
+          yield {
+            val movie = b.split(",")(0).replace("(", "").replace(")", "")
+            val tf = b.split(",")(1).replace("(", "").replace(")", "")
+            val idf = scala.math.log(N / df.toInt)
+            var weight = tf.toInt * idf
+
+            var word_tuple = new ListBuffer[String]()
+            word_tuple += word
+            word_tuple += movie
+            word_tuple += weight.toString
+            word_tuple
+          }
+        word_tuple_final
+      }
+
+    //Sorting the final_weight according to the weight calculated: (word,(movie,weight))
+    val tfidf = final_weight
+      .flatMap(x => x)
+      .map(x => (x(0), (x(1), x(2))))
+      .sortBy { case (word: String, (movieid: String, tfidf: String)) => -tfidf.toDouble }
+
+    val top10Movies = tfidf.filter(x => x._1 == words).take(10)
+      .map { case (word, (movieid, wt)) => (lookup.lookup(movieid).mkString(""), wt) }
+    top10Movies.toSeq.foreach(println)
+
+    sc.parallelize(top10Movies).saveAsTextFile(dir + "/output")
 
   }
 
